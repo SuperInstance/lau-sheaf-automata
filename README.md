@@ -1,49 +1,53 @@
 # lau-sheaf-automata
 
-**Sheaf-theoretic protocol verification — deadlock-free iff H¹=0, composition as cup product.**
+**Sheaf-theoretic protocol verification — deadlock-free iff H¹ = 0, composition as cup product.**
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+A Rust library implementing Kimi's Theorem 2: a protocol P is deadlock-free if and only if H¹(Sh(States); L(P)) = 0. Protocol composition is modeled as the **cup product** in sheaf cohomology, and deadlock detection corresponds to finding non-zero **obstruction classes** in H¹.
+
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 ---
 
 ## What This Does
 
-This crate implements **Kimi's Theorem 2**: a protocol `P` is deadlock-free if and only if the first sheaf cohomology group vanishes:
+In concurrent and distributed systems, **deadlock** — where agents cyclically wait on each other forever — is notoriously hard to detect. Traditional approaches (model checking, type systems) don't scale well to large systems with many agents.
 
-```
-P is deadlock-free  ⟺  H¹(Sh(States); L(P)) = 0
-```
+This crate takes a **topological** approach:
 
-It provides:
+1. Model a protocol's configuration space as a **sheaf** — a mathematical object that assigns local data (stalks) to regions of a space and connects them with restriction maps
+2. Compute the **sheaf cohomology** H⁰ and H¹ using coboundary maps and linear algebra
+3. **Deadlock ≡ H¹ ≠ 0**: a non-trivial cohomology class is an "obstruction" to deadlock freedom
 
-- **Finite automata (DFA/NFA)** converted to sheaf stalks — language sheaves over agent configurations
-- **Sheaf data structures** — stalks, restriction maps, open sets, sections
-- **Sheaf cohomology computation** — H⁰ (global sections), H¹ (obstructions/deadlocks), H²
-- **Protocol sheaves** — multi-agent protocols as sheaves over configuration spaces
-- **Cup products** — protocol composition as `H¹ × H¹ → H²` in sheaf cohomology
-- **Sheaf Laplacian** — efficient global section detection via spectral methods
-- **Ergodic consensus** — distributed consensus as global section finding
-- **Protocol refinement** — natural transformations between sheaf functors
+Additionally:
 
-The core workflow: define agents, build the protocol sheaf, compute cohomology, check if H¹ = 0.
+- **Protocol composition** (running two protocols together) corresponds to the **cup product** ⌣: H¹ × H¹ → H²
+- **Refinement** (making a protocol more specific) is a **natural transformation** between sheaf functors
+- **Consensus** is detected via **ergodic theory** on the sheaf's state space
+- The **sheaf Laplacian** provides spectral verification of global consistency
 
 ---
 
 ## Key Idea
 
-In a multi-agent protocol, each agent has a local state machine. The collection of all agent states forms a topological space (the **nerve** of the communication graph). A **sheaf** assigns data to each open set (agent neighborhood) with restriction maps for how data glues across overlaps.
+A **cellular sheaf** F on a topological space X assigns:
+- A **stalk** F(U) (a vector space) to each open set U
+- A **restriction map** ρ_{V→U}: F(V) → F(U) for V ⊆ U
 
-| Sheaf Theory | Protocol Verification |
-|---|---|
-| Stalk at vertex `v` | Agent `v`'s local protocol state |
-| Restriction map `ρ_{UV}` | Communication from agent `U` to neighbor `V` |
-| Global section `s ∈ H⁰` | Consistent global protocol state |
-| H¹ obstruction class | A deadlock — local states can't be patched globally |
-| Cup product `∪: H¹ × H¹ → H²` | Composition of two protocols |
-| Sheaf Laplacian `Δ_L` | Spectral tool for finding global sections |
-| Refinement `P → Q` | Protocol specialization / abstraction |
+For a protocol P with agents {A₁, …, Aₙ}, we build the **language sheaf** L(P):
+- Stalk at agent Aᵢ = its local state space
+- Stalk at intersection Uᵢ ∩ Uⱼ = joint states visible to both agents
+- Restriction maps = projections from joint to local states
 
-If `H¹ ≠ 0`, there exist obstruction classes — local states that are individually valid but cannot be composed into a global consistent state. This is precisely a deadlock.
+The **Čech cohomology** of this sheaf is computed via coboundary maps:
+
+> d⁰: C⁰ → C¹ (local → pairwise)  
+> d¹: C¹ → C² (pairwise → triple intersections)
+
+Then:
+- H⁰ = ker(d⁰) = **global sections** (consistent configurations)
+- H¹ = ker(d¹) / im(d⁰) = **obstructions** (deadlock classes)
+
+**Kimi's Theorem 2**: P is deadlock-free ⟺ H¹ = 0.
 
 ---
 
@@ -51,245 +55,298 @@ If `H¹ ≠ 0`, there exist obstruction classes — local states that are indivi
 
 ```toml
 [dependencies]
-lau-sheaf-automata = "0.1.0"
+lau-sheaf-automata = "0.1"
 ```
-
-Requires Rust 2021 edition. Dependencies: `nalgebra`, `serde`.
 
 ---
 
 ## Quick Start
 
 ```rust
-use lau_sheaf_automata::*;
-use lau_sheaf_automata::sheaf::{OpenSet, Sheaf, Stalk, SheafSpace};
+use lau_sheaf_automata::{
+    Protocol, AgentConfig, Sheaf, Stalk, OpenSet, RestrictionMap,
+    ConsensusResult, CupProduct, SheafLaplacian, DeadlockResult,
+};
 
-// --- Define agents ---
-let agent1 = AgentConfig::new(0, "alice", vec!["idle".into(), "busy".into()])
-    .with_neighbors(vec![1]);
-let agent2 = AgentConfig::new(1, "bob", vec!["idle".into(), "busy".into()])
-    .with_neighbors(vec![0]);
+// --- Define a protocol with 3 agents ---
+let mut protocol = Protocol::new("MutexProtocol");
+for i in 0..3 {
+    let neighbors: Vec<usize> = (0..3).filter(|&j| j != i).collect();
+    let agent = AgentConfig::new(i, format!("Agent{}", i),
+        vec!["idle".into(), "waiting".into(), "critical".into()])
+        .with_neighbors(neighbors);
+    protocol.add_agent(agent);
+}
 
-// --- Build protocol ---
-let protocol = Protocol::new("handshake", vec![agent1, agent2]);
+// --- Build the language sheaf L(P) ---
+let protocol_sheaf = protocol.to_sheaf();
 
-// --- Build protocol sheaf ---
-let sheaf = protocol.build_sheaf();
-
-// --- Compute cohomology ---
-let cohomology = sheaf.compute_cohomology();
-println!("H⁰ dimension (global sections): {}", cohomology.h0_dimension());
-println!("H¹ dimension (deadlocks): {}", cohomology.h1_dimension());
-
-// --- Check deadlock freedom ---
-let deadlock_result = DeadlockResult::from_cohomology(&cohomology);
-if deadlock_result.has_deadlock {
-    println!("DEADLOCK DETECTED! {} obstruction classes",
-        deadlock_result.obstruction_dimension);
+// --- Check for deadlocks ---
+let result: DeadlockResult = protocol_sheaf.check_deadlock();
+if result.has_deadlock {
+    println!("DEADLOCK DETECTED! {} obstruction classes", result.obstruction_dimension);
+    for obs in &result.obstructions {
+        println!("  - {}", obs);
+    }
 } else {
-    println!("Protocol is deadlock-free.");
+    println!("Protocol is deadlock-free (H¹ = 0)");
 }
-```
 
-### DFA → Sheaf Conversion
+// --- Protocol composition via cup product ---
+// Composing two protocols: H¹(P₁) ⌣ H¹(P₂) → H²(P₁ ∘ P₂)
 
-```rust
-let mut dfa = Dfa::new(
-    vec!["idle".into(), "request".into(), "done".into()],
-    vec!["req".into(), "ack".into()],
-    0,
-    vec![false, false, true],
+// --- Sheaf Laplacian for spectral verification ---
+let lap = SheafLaplacian::from_sheaf_data(
+    3,                    // 3 nodes
+    vec![2, 2, 2],        // stalk dimensions
+    &[(0, 1), (1, 2)],    // edges
+    &[(0, 1, 1.0), (1, 2, 1.0)], // restriction weights
 );
-dfa.add_transition(0, 0, 1);  // idle --req--> request
-dfa.add_transition(1, 1, 2);  // request --ack--> done
-
-// Convert to sheaf stalk
-let stalk = dfa.to_stalk();
-```
-
-### Protocol Composition via Cup Product
-
-```rust
-// Compose two protocols — their obstruction interaction lives in H²
-let cup = CupProduct::new(h1_dim_a, h1_dim_b, h2_dim);
-let combined_obstruction = cup.compute(&obstruction_a, &obstruction_b);
-```
-
-### Consensus via Sheaf Laplacian
-
-```rust
-let consensus = ErgodicConsensus::new()
-    .with_tolerance(1e-8);
-let result = consensus.compute(&laplacian, &initial_sections);
-if result.reached {
-    println!("Consensus reached in {} iterations", result.iterations);
-}
+let kernel = lap.kernel();          // Global sections (H⁰)
+let gap = lap.spectral_gap();       // Measures consensus speed
 ```
 
 ---
 
 ## API Reference
 
-### Core Types
+### `Sheaf` — Cellular Sheaf Data Structure
 
-| Type | Module | Description |
-|---|---|---|
-| `Dfa` | `automata` | Deterministic finite automaton |
-| `Nfa` | `automata` | Nondeterministic finite automaton |
-| `Stalk` | `sheaf` | Vector space attached to an open set |
-| `RestrictionMap` | `sheaf` | Linear map between stalks on nested open sets |
-| `OpenSet` | `sheaf` | Named subset of the base space |
-| `Sheaf` | `sheaf` | Sheaf: stalks + restriction maps + topology |
-| `SheafSpace` | `sheaf` | Topological base space with open cover |
-| `CochainComplex` | `cohomology` | C⁰ → C¹ → C² complex |
-| `Cohomology` | `cohomology` | Computed H⁰, H¹, H² groups |
-| `AgentConfig` | `protocol` | Agent with local states and neighbors |
-| `Protocol` | `protocol` | Multi-agent protocol with transition rules |
-| `ProtocolSheaf` | `protocol` | Sheaf derived from a protocol |
-| `CupProduct` | `cup_product` | Bilinear map H¹ × H¹ → H² |
-| `SheafLaplacian` | `laplacian` | Spectral operator for global sections |
-| `ErgodicConsensus` | `consensus` | Iterative consensus via Laplacian |
-| `Refinement` | `refinement` | Natural transformation between sheaves |
-| `DeadlockResult` | `lib` | Deadlock detection from cohomology |
+```rust
+pub struct Sheaf {
+    pub name: String,
+    pub stalks: BTreeMap<usize, Stalk>,
+    pub open_sets: BTreeMap<String, OpenSet>,
+    pub restriction_maps: BTreeMap<String, RestrictionMap>,
+}
+```
 
-### Key Methods
+| Method | Description |
+|--------|-------------|
+| `new(name)` | Create an empty sheaf |
+| `add_stalk(point, stalk)` | Assign a stalk at a point |
+| `add_open_set(open_set)` | Add an open set to the topology |
+| `add_restriction_map(map)` | Add ρ_{V→U}: F(V) → F(U) |
+| `get_restriction(source, target)` | Retrieve a restriction map |
+| `sections_over(open_set)` | Compute section space basis |
+| `total_dimension() → usize` | Sum of all stalk dimensions |
+| `constant(name, n, dim)` | Build a constant sheaf (same stalk everywhere) |
+| `verify_axioms() → bool` | Check consistency of restriction maps |
 
-**Dfa / Nfa**
-- `Dfa::new(states, alphabet, initial, accepting)` — create automaton
-- `dfa.add_transition(from, symbol, to)` — add transition
-- `dfa.run(&word)` — execute on input, get final state
-- `dfa.accepts(&word)` — membership test
-- `dfa.to_stalk()` — convert to sheaf stalk
-- `Nfa::epsilon_closure(&state)` — ε-closure computation
+### `Stalk` — Local Data at a Point
 
-**Sheaf**
-- `Sheaf::new(space)` — create empty sheaf over a space
-- `sheaf.add_stalk(open_set, stalk)` — attach data
-- `sheaf.add_restriction(source, target, map)` — add restriction map
-- `sheaf.section_at(&open_set)` — retrieve local section
-- `sheaf.compute_cohomology()` → `Cohomology` — full cohomology computation
+```rust
+pub enum Stalk {
+    VectorSpace { dimension: usize },
+    LabelSet { labels: Vec<String> },
+    AutomatonState { states: Vec<usize>, accepting: Vec<bool> },
+    Custom { data: Vec<u8>, dimension: usize },
+}
+```
 
-**Cohomology**
-- `cohomology.h0_dimension()` — dim(H⁰) = number of global sections
-- `cohomology.h1_dimension()` — dim(H¹) = number of obstruction classes
-- `cohomology.h2_dimension()` — dim(H²) = cup product target
-- `cohomology.h0_representatives()` — basis for global sections
-- `cohomology.h1_representatives()` — basis for obstruction classes
+### `OpenSet` — Region of the Base Space
 
-**Protocol**
-- `Protocol::new(name, agents)` — create protocol
-- `protocol.build_sheaf()` → `ProtocolSheaf` — derive sheaf from agents
-- `protocol.check_deadlock()` → `DeadlockResult` — via cohomology
+| Method | Description |
+|--------|-------------|
+| `new(name, points)` | Create an open set |
+| `universe(n)` | The full space |
+| `intersection(other)` | Set intersection |
+| `union(other)` | Set union |
+| `contains(point)` | Membership test |
 
-**CupProduct**
-- `CupProduct::new(h1_dim_a, h1_dim_b, h2_dim)` — create bilinear map
-- `cup.compute(&class_a, &class_b)` → `Vec<f64>` — cup product of obstruction classes
-- `cup.is_graded_commutative()` — verify `a ∪ b = (-1)^{pq} b ∪ a`
+### `RestrictionMap` — Linear Map Between Stalks
 
-**SheafLaplacian**
-- `SheafLaplacian::from_sheaf_data(n, stalk_dims, edges, restriction_norms)` — build matrix
-- `laplacian.global_sections()` — compute ker(Δ_L) = H⁰
-- `laplacian.spectrum()` — eigenvalues for spectral analysis
+| Method | Description |
+|--------|-------------|
+| `new(source, target, matrix)` | Create from a matrix |
+| `identity(name, dim)` | Identity map |
+| `zero(source, target, dims)` | Zero map |
+| `apply(v)` | Apply to a vector |
+| `compose(other)` | Compose two maps (matrix multiply) |
 
-**ErgodicConsensus**
-- `ErgodicConsensus::new()` — default consensus solver
-- `consensus.compute(&laplacian, &initial)` → `ConsensusResult` — iterate to global section
+### `Protocol` / `ProtocolSheaf` — Protocol as Sheaf
 
-**Refinement**
-- `Refinement::new(source, target, component_maps)` — natural transformation
-- `refinement.induced_map_on_cohomology(&h_source, &h_target)` — cohomology map
-- `refinement.is_monic` / `is_epic` — injective/surjective check
+| Method | Description |
+|--------|-------------|
+| `Protocol::new(name)` | Create empty protocol |
+| `add_agent(agent)` | Add an agent |
+| `add_rule(rule)` | Add a transition rule |
+| `to_sheaf() → ProtocolSheaf` | Build the language sheaf L(P) |
+| `ProtocolSheaf::check_deadlock() → DeadlockResult` | H¹ deadlock detection |
+| `ProtocolSheaf::compute_cohomology() → Cohomology` | Full cohomology computation |
+
+### `DeadlockResult` — Deadlock Detection Output
+
+```rust
+pub struct DeadlockResult {
+    pub has_deadlock: bool,
+    pub obstruction_dimension: usize,
+    pub obstructions: Vec<String>,
+}
+```
+
+### `Cohomology` — Sheaf Cohomology Groups
+
+| Method | Description |
+|--------|-------------|
+| `h0_dimension() → usize` | dim H⁰ (global sections) |
+| `h1_dimension() → usize` | dim H¹ (obstructions) |
+| `is_deadlock_free() → bool` | H¹ = 0 |
+| `euler_characteristic() → i64` | χ = dim H⁰ − dim H¹ |
+| `betti_numbers() → (usize, usize, usize)` | (h⁰, h¹, h²) |
+| `obstruction_classes() → Vec<Vec<f64>>` | Basis for H¹ |
+| `trivial()` | Trivial cohomology (point space) |
+
+### `CupProduct` — Protocol Composition
+
+| Method | Description |
+|--------|-------------|
+| `compute(h1_a, h1_b) → Vec<Vec<f64>>` | Cup product H¹ × H¹ → H² |
+| `is_associative() → bool` | Verify (α ⌣ β) ⌣ γ = α ⌣ (β ⌣ γ) |
+| `is graded_commutative() → bool` | Verify α ⌣ β = (−1)^(pq) β ⌣ α |
+
+### `Refinement` — Protocol Refinement (Natural Transformation)
+
+| Method | Description |
+|--------|-------------|
+| `new(source, target, maps)` | Create refinement |
+| `verify_naturality() → bool` | Check naturality squares commute |
+| `induced_map_h0() → Vec<f64>` | Map on H⁰ (global sections) |
+| `induced_map_h1() → Vec<f64>` | Map on H¹ (obstructions) |
+| `is_safe_refinement() → bool` | Refinement preserves deadlock-freedom |
+
+### `SheafLaplacian` — Spectral Protocol Verification
+
+| Method | Description |
+|--------|-------------|
+| `from_sheaf_data(n, dims, edges, weights)` | Build from sheaf |
+| `kernel() → Vec<Vec<f64>>` | Global sections (ker LΣ) |
+| `kernel_dimension() → usize` | dim ker LΣ |
+| `apply(v) → Vec<f64>` | LΣ · v |
+| `eigenvalues() → Vec<f64>` | Eigenvalue spectrum |
+| `spectral_gap() → f64` | Smallest non-zero eigenvalue |
+| `is_global_section(v) → bool` | Is v in ker LΣ? |
+
+### `ErgodicConsensus` — Consensus via Ergodic Theory
+
+| Method | Description |
+|--------|-------------|
+| `new(n_states, tolerance)` | Create consensus checker |
+| `check_consensus(trajectory) → ConsensusResult` | Check if trajectory converges |
+| `mixing_time(trajectory) → usize` | Steps to reach consensus |
+
+### Prebuilt Protocol Generators
+
+| Function | Description |
+|----------|-------------|
+| `mutex_protocol(n_agents, n_resources)` | N-agent mutual exclusion |
+| `deadlock_free_ring(n)` | Ring topology (always safe) |
+| `circular_wait_deadlock(n)` | N-node circular wait (always deadlocked) |
 
 ---
 
 ## How It Works
 
-### 1. Automata as Sheaf Stalks
+### Architecture
 
-Each agent's local automaton (DFA/NFA) defines a **stalk** — a vector space whose basis elements are the automaton states. Multiple agents give a product of stalks over the communication graph.
+```
+Protocol (agents + rules)
+  └─ to_sheaf() → ProtocolSheaf (language sheaf L(P))
+       ├─ compute_cohomology() → Cohomology (H⁰, H¹)
+       │    └─ check_deadlock() → DeadlockResult
+       ├─ CupProduct (protocol composition ⌣: H¹ × H¹ → H²)
+       ├─ Refinement (natural transformation between sheaf functors)
+       ├─ SheafLaplacian (spectral verification)
+       └─ ErgodicConsensus (trajectory-based consensus)
 
-### 2. Communication as Restriction Maps
+Foundation:
+  Sheaf (stalks + open sets + restriction maps)
+    └─ CochainComplex (d⁰, d¹ coboundary maps)
+         └─ Cohomology (ker/im computation)
+```
 
-When agents communicate, their states must be compatible. Restriction maps encode this compatibility: the map `ρ_{UV}` specifies how agent `U`'s local state constrains neighbor `V`'s state. These maps form a **presheaf** functor from the nerve of the communication graph to vector spaces.
+### Module Map
 
-### 3. Cohomology = Deadlock Detection
-
-The Čech cochain complex `C⁰ → C¹ → C²` is built from the sheaf:
-- `C⁰` = assignments of states to individual agents
-- `C¹` = assignments to pairwise overlaps (communication channels)
-- `C²` = assignments to triple overlaps
-- `d₀` = coboundary checking pairwise consistency
-- `d₁` = coboundary checking triple consistency
-
-Then:
-- **H⁰ = ker(d₀)**: global sections — globally consistent state assignments
-- **H¹ = ker(d₁)/im(d₀)**: obstruction classes — deadlocks
-
-### 4. Cup Product = Protocol Composition
-
-When two protocols `P` and `Q` are composed, their obstruction classes interact via the cup product `∪: H¹(P) × H¹(Q) → H²(P ⊗ Q)`. A non-zero result means the composed protocol has higher-order obstructions.
-
-### 5. Sheaf Laplacian
-
-The sheaf Laplacian `Δ_L = D - A_sheaf` is a discrete operator whose kernel equals H⁰ (global sections). It enables efficient spectral methods for finding consistent states without enumerating the full cochain complex.
-
-### 6. Consensus via Laplacian Flow
-
-Distributed consensus is equivalent to finding a global section. The Laplacian flow `dx/dt = -Δ_L x` converges to the nearest global section, providing an iterative distributed algorithm.
+| Module | Contents |
+|--------|----------|
+| `sheaf` | `Sheaf`, `Stalk`, `OpenSet`, `RestrictionMap`, `SheafSpace` |
+| `automata` | `Dfa`, `Nfa` — automaton structures |
+| `cohomology` | `Cohomology`, `CochainComplex` — H⁰, H¹ computation |
+| `protocol` | `Protocol`, `AgentConfig`, `ProtocolSheaf`, prebuilt protocols |
+| `cup_product` | `CupProduct` — protocol composition in cohomology |
+| `refinement` | `Refinement` — natural transformations between protocol sheaves |
+| `consensus` | `ErgodicConsensus`, `ConsensusResult` — convergence detection |
+| `laplacian` | `SheafLaplacian` — spectral analysis of protocol sheaves |
 
 ---
 
 ## The Math
 
-### Sheaf Cohomology
+### Sheaves
 
-Given a sheaf `F` on a topological space `X` with open cover `{Uᵢ}`:
+A **sheaf** F on a topological space X assigns algebraic data to regions of X in a way that is locally compatible:
 
-```
-Čech cochain complex:  C⁰ →[d⁰] C¹ →[d¹] C² → ...
+1. **Stalks**: For each point x, a stalk F_x (e.g., a vector space)
+2. **Restriction maps**: For V ⊆ U, a map ρ_{V→U}: F(U) → F(V)
+3. **Gluing axiom**: Compatible local sections can be glued into a global section
+4. **Identity axiom**: A section determined locally is determined uniquely
 
-C⁰ = Πᵢ F(Uᵢ)         (local sections)
-C¹ = Πᵢ<ⱼ F(Uᵢ ∩ Uⱼ)   (pairwise compatibility data)
-C² = Πᵢ<j<k F(Uᵢ ∩ Uⱼ ∩ Uₖ)  (triple compatibility)
+### Čech Cohomology
 
-H⁰(X; F) = ker(d⁰)     (global sections)
-H¹(X; F) = ker(d¹)/im(d⁰)  (obstruction classes)
-```
+Given an open cover {Uᵢ} of X and a sheaf F, the **Čech cochain complex** is:
 
-### Deadlock Theorem
+> C⁰ = ⊕ F(Uᵢ) — local sections  
+> C¹ = ⊕ F(Uᵢ ∩ Uⱼ) — pairwise sections  
+> C² = ⊕ F(Uᵢ ∩ Uⱼ ∩ Uₖ) — triple sections
 
-```
-P is deadlock-free ⟺ H¹(Sh(States); L(P)) = 0
-```
+With coboundary maps:
+- d⁰: C⁰ → C¹ sends (sᵢ) to (ρⱼ(sᵢ) − ρᵢ(sⱼ)) on each intersection
+- d¹: C¹ → C² defined analogously
 
-**Proof sketch**: H¹ measures the failure of local data to patch into global data. If H¹ ≠ 0, there exist local states that are pairwise compatible but not globally consistent — a deadlock. If H¹ = 0, all pairwise compatibilities extend to global consistency.
+The cohomology groups are:
+- **H⁰(X, F) = ker(d⁰)** — global sections (consistent configurations)
+- **H¹(X, F) = ker(d¹)/im(d⁰)** — obstruction classes (deadlock witnesses)
+
+### Kimi's Theorem 2
+
+> A protocol P is deadlock-free if and only if H¹(Sh(States); L(P)) = 0.
+
+Intuition: H¹ measures the failure of local compatibility to produce global compatibility. A non-zero class in H¹ means there are local configurations that are pairwise compatible but have no global extension — exactly the situation in deadlock.
 
 ### Cup Product
 
-The cup product is the bilinear map:
-```
-∪: H^p(F) × H^q(G) → H^{p+q}(F ⊗ G)
-```
+The **cup product** ⌣: H^p × H^q → H^(p+q) composes cohomology classes. For protocols, this corresponds to **running two protocols simultaneously**:
 
-Defined on cochains by:
-```
-(α ∪ β)(U₀...U_{p+q}) = α(U₀...U_p) · ρ(β(U_p...U_{p+q}))
-```
+- If P₁ has obstruction class α ∈ H¹ and P₂ has β ∈ H¹, then P₁ ∘ P₂ has class α ⌣ β ∈ H²
+- The composed protocol can have deadlocks even when both sub-protocols are individually safe
 
-It is graded-commutative: `α ∪ β = (-1)^{pq} β ∪ α`.
+### The Sheaf Laplacian
 
-### Sheaf Laplacian
+The **sheaf Laplacian** LΣ = (δ⁰)† δ⁰ is a positive semi-definite operator whose kernel is exactly H⁰ (global sections). Its spectral gap measures how quickly the protocol converges to a consistent state.
 
-For a cellular sheaf on a graph with vertices `V` and edges `E`:
-```
-Δ_L = L_↓ + L_↑
+---
 
-where:
-  (L_↓)ᵥ = Σ_{e:v∼w} ρ_{v,e}ᵀ ρ_{v,e}    (restriction norm²)
-  (L_↑)ᵥ = Σ_{e:v∼w} ρ_{w,e}ᵀ ρ_{w,e}    (co-restriction norm²)
+## Testing
+
+```bash
+cargo test
 ```
 
-The kernel of `Δ_L` equals the global sections: `ker(Δ_L) = H⁰(X; F)`.
+**75 tests** covering:
+
+- Sheaf construction (stalks, open sets, restriction maps)
+- Stalk operations and dimension calculations
+- Open set intersection and union
+- Restriction map composition and application
+- Cochain complex construction and verification (d¹ ∘ d⁰ = 0)
+- Cohomology computation (H⁰, H¹ dimensions, Euler characteristic)
+- Kernel and image computation for coboundary maps
+- Protocol construction and sheaf generation
+- Deadlock detection (free ring vs. circular wait)
+- Cup product computation
+- Refinement naturality verification
+- Sheaf Laplacian (kernel, spectral gap, global sections)
+- Consensus detection via ergodic theory
 
 ---
 
