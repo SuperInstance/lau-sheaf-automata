@@ -1,0 +1,13 @@
+[package]
+name = "lau-sheaf-automata"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/SuperInstance/lau-sheaf-automata"
+description = "Sheaf-theoretic protocol verification — deadlock-free iff H¹=0, composition as cup product"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+nalgebra = "0.33"
+
+[dev-dependencies]
